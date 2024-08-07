@@ -2,6 +2,7 @@ import { ApolloServer } from '@apollo/server';
 import { startStandaloneServer } from '@apollo/server/standalone';
 import { gql } from 'graphql-tag';
 import admin from 'firebase-admin';
+import { Timestamp } from 'firebase-admin/firestore';
 import serviceAccount from './serviceAccountKey.json' assert { type: "json" };
 
 admin.initializeApp({
@@ -10,62 +11,75 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-export const typeDefs = gql `
+export const typeDefs = gql`
   type Todo {
     id: ID!
     description: String!
     completed: Boolean!
+    updatedAt: String!
   }
 
   type Query {
-    todos: [Todo]
-    todo(id: ID!): Todo
+    todos(since: String): [Todo]
   }
 
   type Mutation {
     addTodo(description: String!): Todo
     completeTodo(id: ID!): Todo
     deleteTodo(id: ID!): Boolean
+    updateTodos(todos: [TodoInput!]!): Boolean
+  }
+
+  input TodoInput {
+    id: ID!
+    description: String!
+    completed: Boolean!
+    updatedAt: String!
   }
 `;
 
 export const resolvers = {
-    Query: {
-        todos: async () => {
-            const snapshot = await db.collection('todos').get();
-            return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        },
-        todo: async (_, { id }) => {
-            const doc = await db.collection('todos').doc(id).get();
-            if (!doc.exists)
-                throw new Error('Todo not found');
-            return { id: doc.id, ...doc.data() };
-        },
+  Query: {
+    todos: async (_: any, { since }: { since?: string }) => {
+      let query = db.collection('todos');
+      if (since) {
+        query = query.where('updatedAt', '>', Timestamp.fromDate(new Date(since)));
+      }
+      const snapshot = await query.get();
+      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     },
-    Mutation: {
-        addTodo: async (_, { description }) => {
-            const docRef = await db.collection('todos').add({ description, completed: false });
-            const doc = await docRef.get();
-            return { id: doc.id, ...doc.data() };
-        },
-        completeTodo: async (_, { id }) => {
-            const docRef = db.collection('todos').doc(id);
-            const doc = await docRef.get();
-            if (!doc.exists)
-                throw new Error('Todo not found');
-            const completed = !doc.data().completed;
-            await docRef.update({ completed });
-            return { id: doc.id, ...doc.data(), completed };
-        },
-        deleteTodo: async (_, { id }) => {
-            const docRef = db.collection('todos').doc(id);
-            const doc = await docRef.get();
-            if (!doc.exists)
-                throw new Error('Todo not found');
-            await docRef.delete();
-            return true;
-        },
+  },
+  Mutation: {
+    addTodo: async (_: any, { description }: { description: string }) => {
+      const docRef = await db.collection('todos').add({
+        description,
+        completed: false,
+        updatedAt: new Date().toISOString(),
+      });
+      const doc = await docRef.get();
+      return { id: doc.id, ...doc.data() };
     },
+    completeTodo: async (_: any, { id }: { id: string }) => {
+      const docRef = db.collection('todos').doc(id);
+      await docRef.update({ completed: true, updatedAt: new Date().toISOString() });
+      const doc = await docRef.get();
+      return { id: doc.id, ...doc.data() };
+    },
+    deleteTodo: async (_: any, { id }: { id: string }) => {
+      const docRef = db.collection('todos').doc(id);
+      await docRef.delete();
+      return true;
+    },
+    updateTodos: async (_: any, { todos }: { todos: any[] }) => {
+      const batch = db.batch();
+      todos.forEach(todo => {
+        const docRef = db.collection('todos').doc(todo.id);
+        batch.set(docRef, todo, { merge: true });
+      });
+      await batch.commit();
+      return true;
+    },
+  },
 };
 
 // The ApolloServer constructor requires two parameters: your schema
