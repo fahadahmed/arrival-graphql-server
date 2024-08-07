@@ -43,6 +43,7 @@ export const resolvers = {
     todos: async (_: any, { since }: { since?: string }) => {
       let query = db.collection('todos');
       if (since) {
+        // @ts-ignore
         query = query.where('updatedAt', '>', Timestamp.fromDate(new Date(since)));
       }
       const snapshot = await query.get();
